@@ -32,6 +32,11 @@
 
 #include <opencv2/core.hpp>
 
+//its not beautiful
+#include "../include/cam_node_listener.h"
+
+#include <std_srvs/Empty.h>
+
 //how to measure memory consumption on a shell basis:
 //while true; do sleep 0.1; nvidia-smi | grep mapping | grep -oh "[0-9]*MiB" >> mappingMemory.txt ; done
 //while true; do sleep 0.1; nvidia-smi | grep ElasticFusion | grep -oh "[0-9]*MiB" >> elfuMemory.txt ; done
@@ -46,23 +51,9 @@
 using namespace std;
 using namespace Eigen;
 
-/*
-class CamNode : video::Camera{
-public:
-	std::mutex mutex;
-	cv::Mat rgb;
-	cv::Mat depth;
-	bool new_rgb;
-	bool new_depth;
 
+CamNodeListener sensor;
 
-
-
-
-};
-
-CamNode sensor;
-*/
 void imageCallback(const sensor_msgs::ImageConstPtr& msg){
 	cv::Mat image(msg->height,msg->width,CV_8UC3);
 	//cv::Mat image(480,640,CV_8UC3);
@@ -74,6 +65,10 @@ void imageCallback(const sensor_msgs::ImageConstPtr& msg){
 	}
 	imshow("rgb",image);
 	cv::waitKey(1);
+	sensor.mutex.lock();
+	sensor.rgb_in = image.clone();
+	sensor.new_rgb = true;
+	sensor.mutex.unlock();
 
 
 }
@@ -88,8 +83,30 @@ void depthCallback(const sensor_msgs::ImageConstPtr& msg){
 	imshow("depth",image*5);
 	cv::waitKey(1);
 
+	sensor.mutex.lock();
+	sensor.depth_in = image.clone();
+	sensor.new_depth = true;
+	sensor.mutex.unlock();
+
 }
 
+
+
+bool start_reconstructing(std_srvs::Empty::Request& req, std_srvs::Empty::Response& resp){
+	cout << "debug: start reconstructing" << endl;
+	return true;
+}
+
+bool stop_reconstructing(std_srvs::Empty::Request& req, std_srvs::Empty::Response& resp){
+	cout << "debug: stop reconstructing " << endl;
+	return true;
+}
+
+//TODO: actually return the whole reconstruction
+bool retreive_reconstruction(std_srvs::Empty::Request& req, std_srvs::Empty::Response& resp){
+	cout << "extract reconstruction and assemble result" << endl;
+	return true;
+}
 
 static void error_callback(int error, const char *description) {
 	fprintf(stderr, "Error: %s\n", description);
@@ -220,7 +237,9 @@ int main(int argc, char *argv[]) {
 	image_transport::Subscriber rgb_sub = rgb_it.subscribe("/hsrb/head_rgbd_sensor/rgb/image_raw", 1, imageCallback);
 	image_transport::Subscriber depth_sub = depth_it.subscribe("/hsrb/head_rgbd_sensor/depth_registered/image_raw", 1, depthCallback);
 
-
+	ros::ServiceServer start_service = nh.advertiseService("start_reconstructing", start_reconstructing);
+	ros::ServiceServer stop_service = nh.advertiseService("stop_reconstructing", stop_reconstructing);
+	ros::ServiceServer retreive_service = nh.advertiseService("retreive_reconstruction", retreive_reconstruction);
 
 	google::InitGoogleLogging(argv[0]);
 
@@ -331,7 +350,7 @@ int main(int argc, char *argv[]) {
 			make_shared<MeshReconstruction>(invisible_window, &garbage_collector,
 											multithreaded, 640, 480);
 
-	video::TuwDataset dataset(dataset_path, true);
+	//video::TuwDataset dataset(dataset_path, true);
 
 	shared_ptr<IncrementalSegmentation> incremental_segmentation =
 			make_shared<EdithSegmentation>();
@@ -341,9 +360,9 @@ int main(int argc, char *argv[]) {
 	TextureUpdater texture_updater;
 	SchedulerBase *scheduler = nullptr;
 	if(multithreaded) {
-		scheduler = new SchedulerThreaded(scalable_map, &dataset, invisible_window);
+		scheduler = new SchedulerThreaded(scalable_map, &sensor, invisible_window);
 	} else {
-		scheduler = new SchedulerLinear(scalable_map, &garbage_collector, &dataset,
+		scheduler = new SchedulerLinear(scalable_map, &garbage_collector, &sensor,
 										invisible_window,
 										&low_detail_renderer,
 										incremental_segmentation);
@@ -392,7 +411,7 @@ int main(int argc, char *argv[]) {
 
 	gfx::GLUtils::checkForOpenGLError("[main] Error creating an opengl context!");
 
-	while(!glfwWindowShouldClose(window) && (dataset.isRunning() || !auto_quit)) {
+	while(!glfwWindowShouldClose(window) && (sensor.isRunning() || !auto_quit)) {
 		scheduler->pause(paused);
 		if(next_single_step) {
 			next_single_step = false;

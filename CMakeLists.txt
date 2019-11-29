@@ -3,7 +3,10 @@ project(scalable_fusion_node)
 
 ## Compile as C++11, supported in ROS Kinetic and newer
 add_compile_options(-std=c++11)
+add_definitions(-DEIGEN_DONT_VECTORIZE)
 
+
+set(CMAKE_BUILD_TYPE DEBUG) #TODO: remove!!
 ## Find catkin macros and libraries
 ## if COMPONENTS list like find_package(catkin REQUIRED COMPONENTS xyz)
 ## is used, also find other catkin packages
@@ -142,7 +145,9 @@ include_directories(
 ## With catkin_make all packages are built within a single CMake context
 ## The recommended prefix ensures that target names across packages don't collide
  add_executable(${PROJECT_NAME} src/scalable_fusion_node.cpp)
-
+add_executable(${PROJECT_NAME}_start_command src/start_command.cpp)
+add_executable(${PROJECT_NAME}_stop_command src/stop_command.cpp)
+add_executable(${PROJECT_NAME}_retreive_reconstruction src/retreive_reconstruction.cpp)
 ## Rename C++ executable without prefix
 ## The above recommended prefix causes long target names, the following renames the
 ## target back to the shorter version for ease of user use
@@ -158,6 +163,19 @@ include_directories(
    	${catkin_LIBRARIES}
 	${scalfu_LIBRARIES}
  )
+
+target_link_libraries(${PROJECT_NAME}_start_command
+        ${catkin_LIBRARIES}
+        )
+
+target_link_libraries(${PROJECT_NAME}_stop_command
+        ${catkin_LIBRARIES}
+        )
+
+target_link_libraries(${PROJECT_NAME}_retreive_reconstruction
+        ${catkin_LIBRARIES}
+        )
+
 
 #############
 ## Install ##
