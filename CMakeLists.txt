@@ -129,6 +129,7 @@ include_directories(
 # include
  ${catkin_INCLUDE_DIRS}
  ${scalfu_INCLUDE_DIRS}
+ ../../devel/include
 )
 
 ## Declare a C++ library

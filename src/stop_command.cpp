@@ -3,9 +3,9 @@
 #include <std_srvs/Empty.h>
 int main(int argc, char **argv){
 
-	ros::init(argc, argv, "start_reconstructing");
+	ros::init(argc, argv, "stop_reconstructing");
 	ros::NodeHandle n;
-	ros::ServiceClient client = n.serviceClient<std_srvs::Empty>("start_reconstructing");
+	ros::ServiceClient client = n.serviceClient<std_srvs::Empty>("stop_reconstructing");
 	std_srvs::Empty empty;
 
 	if (client.call(empty))

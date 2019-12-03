@@ -34,8 +34,10 @@
 
 //its not beautiful
 #include "../include/cam_node_listener.h"
+#include "../include/retreive_mesh.h"
 
 #include <std_srvs/Empty.h>
+#include "colored_mesh_msgs/RetreiveReconstruction.h"
 
 //how to measure memory consumption on a shell basis:
 //while true; do sleep 0.1; nvidia-smi | grep mapping | grep -oh "[0-9]*MiB" >> mappingMemory.txt ; done
@@ -54,6 +56,9 @@ using namespace Eigen;
 
 CamNodeListener sensor;
 
+
+bool running = false;
+bool download_and_reset = false;
 void imageCallback(const sensor_msgs::ImageConstPtr& msg){
 	cv::Mat image(msg->height,msg->width,CV_8UC3);
 	//cv::Mat image(480,640,CV_8UC3);
@@ -65,10 +70,14 @@ void imageCallback(const sensor_msgs::ImageConstPtr& msg){
 	}
 	imshow("rgb",image);
 	cv::waitKey(1);
-	sensor.mutex.lock();
-	sensor.rgb_in = image.clone();
-	sensor.new_rgb = true;
-	sensor.mutex.unlock();
+
+
+	if(running){
+		sensor.mutex.lock();
+		sensor.rgb_in = image.clone();
+		sensor.new_rgb = true;
+		sensor.mutex.unlock();
+	}
 
 
 }
@@ -83,28 +92,41 @@ void depthCallback(const sensor_msgs::ImageConstPtr& msg){
 	imshow("depth",image*5);
 	cv::waitKey(1);
 
-	sensor.mutex.lock();
-	sensor.depth_in = image.clone();
-	sensor.new_depth = true;
-	sensor.mutex.unlock();
+	if(running){
+		sensor.mutex.lock();
+		sensor.depth_in = image.clone();
+		sensor.new_depth = true;
+		sensor.mutex.unlock();
+	}
 
 }
+
 
 
 
 bool start_reconstructing(std_srvs::Empty::Request& req, std_srvs::Empty::Response& resp){
 	cout << "debug: start reconstructing" << endl;
+	running = true;
+	//TODO: start reconstructing +
 	return true;
 }
 
 bool stop_reconstructing(std_srvs::Empty::Request& req, std_srvs::Empty::Response& resp){
 	cout << "debug: stop reconstructing " << endl;
+	running = false;
+	download_and_reset = true;
+	sensor.new_depth = false;
+	//TODO: stop reconstructing + download all the data!
 	return true;
 }
 
+colored_mesh_msgs::RetreiveReconstruction::Response final_mesh;
 //TODO: actually return the whole reconstruction
-bool retreive_reconstruction(std_srvs::Empty::Request& req, std_srvs::Empty::Response& resp){
+bool retreive_reconstruction(colored_mesh_msgs::RetreiveReconstruction::Request& req,
+		colored_mesh_msgs::RetreiveReconstruction::Response& resp){
 	cout << "extract reconstruction and assemble result" << endl;
+	resp = final_mesh;
+
 	return true;
 }
 
@@ -234,8 +256,10 @@ int main(int argc, char *argv[]) {
 	ros::NodeHandle nh;
 	image_transport::ImageTransport rgb_it(nh);
 	image_transport::ImageTransport depth_it(nh);
-	image_transport::Subscriber rgb_sub = rgb_it.subscribe("/hsrb/head_rgbd_sensor/rgb/image_raw", 1, imageCallback);
-	image_transport::Subscriber depth_sub = depth_it.subscribe("/hsrb/head_rgbd_sensor/depth_registered/image_raw", 1, depthCallback);
+	image_transport::Subscriber rgb_sub =
+			rgb_it.subscribe("/hsrb/head_rgbd_sensor/rgb/image_raw", 1, imageCallback);
+	image_transport::Subscriber depth_sub =
+			depth_it.subscribe("/hsrb/head_rgbd_sensor/depth_registered/image_raw", 1, depthCallback);
 
 	ros::ServiceServer start_service = nh.advertiseService("start_reconstructing", start_reconstructing);
 	ros::ServiceServer stop_service = nh.advertiseService("stop_reconstructing", stop_reconstructing);
@@ -249,14 +273,7 @@ int main(int argc, char *argv[]) {
 	string graph_output_file =
 			"/home/simon/datasets/output/graph.txt";
 
-	string output_path;// =
-	//"/home/simon/datasets/tum/output/";
 
-	string coarse_output_file;// =
-	//"/home/simon/datasets/tum/output/coarse.ply";
-
-	string detailed_output_file;// =
-	//"/home/simon/datasets/tum/output/fine.ply";
 
 	float replay_speed = 0.1f;
 #ifdef DEBUG
@@ -294,14 +311,6 @@ int main(int argc, char *argv[]) {
 			 "Using HD textures")
 			("headless,h", po::bool_switch(&headless),
 			 "Hiding windows of live reconstruction.")
-			("output,o", po::value<string>(&output_path),
-			 "Storing the reconstruction in this folder. Full reconstruction with "
-			 "coarse and detailled reconstruction + "
-			 "textures (not implemented).")
-			("coarse", po::value<string>(&coarse_output_file),
-			 "File to store the coarse representation in. Preferrably a ply file.")
-			("detailed", po::value<string>(&detailed_output_file),
-			 "File to store the detailed representation in. Preferrably a ply file.")
 			("scaleGroundtruth", po::value<float>(&groundtruth_trajectory_scale),
 			 "Scale the trajectory so it might match the scale for the depthmap")
 			("invertGroundtruth", po::bool_switch(&invert_ground_truth_trajectory),
@@ -417,6 +426,21 @@ int main(int argc, char *argv[]) {
 			next_single_step = false;
 			scheduler->nextStep();
 		}
+
+		if(download_and_reset){
+			download_and_reset = false;
+			//download all that shit
+
+
+			scalable_map->patches_mutex_.lock();
+			colored_mesh_msgs::SendReconstruction rec =
+					retreive(scalable_map.get());
+			ros::ServiceClient client =
+					nh.serviceClient<colored_mesh_msgs::SendReconstruction>("send_reconstruction");
+			client.call(rec);
+			scalable_map->erase();
+			scalable_map->patches_mutex_.unlock();
+		}
 		//generate the view matrix
 		Matrix4f proj = Camera::projection(static_cast<float>(M_PI) * 0.3f,
 										   800.0f / 600.0f);
@@ -510,7 +534,7 @@ int main(int argc, char *argv[]) {
 		//MapExporter::storeDeformationGraph(scaleableMap.get(),graphOutputFile);
 		//MapExporter::storeGraph(scaleableMap.get(),graphOutputFile);
 	}
-
+	/*
 	if(!coarse_output_file.empty()) {
 		//TODO: make the exporter more of an integral part of the scaleableMap
 		//MapExporter::ExportMap(map,"/home/simon/Documents/reconstruction_results/");
@@ -522,7 +546,7 @@ int main(int argc, char *argv[]) {
 		//store the stupid reconstruction somewhere
 		MapExporter::storeFine(scalable_map.get(), detailed_output_file);
 	}
-
+	*/
 	close_request =  true;
 
 	cout << "[main] DEBUG everything should be deleted" << endl;
