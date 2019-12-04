@@ -17,6 +17,7 @@ public:
 	//! Dataset-specific extension of Source::readFrame()
 	bool readFrame(){
 		//cout << " is this even called" << endl;
+
 		if(new_rgb && new_depth){
 			//cout << "got new frame" << endl;
 			mutex.lock();
@@ -33,6 +34,9 @@ public:
 	CamNodeListener() {
 		intrinsics_rgb_ = Vector4f(530, 530, 320, 240);
 		intrinsics_depth_ = Vector4f(570, 570, 320, 240);
+
+		intrinsics_rgb_ = Vector4f(538.39, 538.085, 315, 233);
+		intrinsics_depth_ = Vector4f(538.39, 538.085, 315, 233);
 		is_running_ = true;
 	}
 

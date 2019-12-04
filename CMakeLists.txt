@@ -13,6 +13,7 @@ set(CMAKE_BUILD_TYPE DEBUG) #TODO: remove!!
 find_package(catkin REQUIRED COMPONENTS
         roscpp
         std_msgs
+        tf2_ros
         message_filters
    #     cv_bridge
         message_generation

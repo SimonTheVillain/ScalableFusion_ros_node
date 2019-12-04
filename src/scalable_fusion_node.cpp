@@ -38,6 +38,12 @@
 
 #include <std_srvs/Empty.h>
 #include "colored_mesh_msgs/RetreiveReconstruction.h"
+#include <tf2_ros/transform_listener.h>
+
+
+tf2_ros::Buffer tfBuffer;
+bool firstFrameInReconstruction = true;
+geometry_msgs::TransformStamped transformStamped;
 
 //how to measure memory consumption on a shell basis:
 //while true; do sleep 0.1; nvidia-smi | grep mapping | grep -oh "[0-9]*MiB" >> mappingMemory.txt ; done
@@ -93,6 +99,10 @@ void depthCallback(const sensor_msgs::ImageConstPtr& msg){
 	cv::waitKey(1);
 
 	if(running){
+		/*
+		if(firstFrameInReconstruction){
+		}
+		 */
 		sensor.mutex.lock();
 		sensor.depth_in = image.clone();
 		sensor.new_depth = true;
@@ -107,6 +117,7 @@ void depthCallback(const sensor_msgs::ImageConstPtr& msg){
 bool start_reconstructing(std_srvs::Empty::Request& req, std_srvs::Empty::Response& resp){
 	cout << "debug: start reconstructing" << endl;
 	running = true;
+	firstFrameInReconstruction = true;
 	//TODO: start reconstructing +
 	return true;
 }
@@ -265,6 +276,10 @@ int main(int argc, char *argv[]) {
 	ros::ServiceServer stop_service = nh.advertiseService("stop_reconstructing", stop_reconstructing);
 	ros::ServiceServer retreive_service = nh.advertiseService("retreive_reconstruction", retreive_reconstruction);
 
+	tf2_ros::TransformListener tfListener(tfBuffer);
+	//translation between map and head_rgbd_sensor_rgb_frame
+
+
 	google::InitGoogleLogging(argv[0]);
 
 	string dataset_path =
@@ -289,7 +304,6 @@ int main(int argc, char *argv[]) {
 	//https://stackoverflow.com/questions/9901803/cuda-error-message-unspecified-launch-failure
 	bool headless      = false;
 	bool auto_quit     = false;
-	bool multithreaded = false;
 	bool store_result  = true;
 	bool hd            = false;
 	int  skip_initial_frames = 0;
@@ -303,8 +317,6 @@ int main(int argc, char *argv[]) {
 			 "Set the TUM like directory to read from.")
 			("groundtruth,t", po::bool_switch(&use_dataset_trajectory),
 			 "Use the groundtruth trajectory that comes with the dataset")
-			("multithreaded,m", po::bool_switch(&multithreaded),
-			 "Split the capturing process up into multiple threads")
 			("startFrame", po::value<int>(&skip_initial_frames),
 			 "Skipping the first frames to start at frame n")
 			("HD,h", po::bool_switch(&hd),
@@ -357,7 +369,7 @@ int main(int argc, char *argv[]) {
 	//create a map object that takes 640 by 480 sized depth images
 	shared_ptr<MeshReconstruction> scalable_map =
 			make_shared<MeshReconstruction>(invisible_window, &garbage_collector,
-											multithreaded, 640, 480);
+											false, 640, 480);
 
 	//video::TuwDataset dataset(dataset_path, true);
 
@@ -368,14 +380,11 @@ int main(int argc, char *argv[]) {
 
 	TextureUpdater texture_updater;
 	SchedulerBase *scheduler = nullptr;
-	if(multithreaded) {
-		scheduler = new SchedulerThreaded(scalable_map, &sensor, invisible_window);
-	} else {
-		scheduler = new SchedulerLinear(scalable_map, &garbage_collector, &sensor,
-										invisible_window,
-										&low_detail_renderer,
-										incremental_segmentation);
-	}
+	scheduler = new SchedulerLinear(scalable_map, &garbage_collector, &sensor,
+									invisible_window,
+									&low_detail_renderer,
+									incremental_segmentation);
+
 	scheduler->pause(paused);
 
 	//create an window with the necessary opengl context
@@ -432,14 +441,46 @@ int main(int argc, char *argv[]) {
 			//download all that shit
 
 
+			MapExporter::storeFine(scalable_map.get(), "/home/simon/datasets/result_mesh/clean.ply");
+
 			scalable_map->patches_mutex_.lock();
 			colored_mesh_msgs::SendReconstruction rec =
 					retreive(scalable_map.get());
 			ros::ServiceClient client =
 					nh.serviceClient<colored_mesh_msgs::SendReconstruction>("send_reconstruction");
-			client.call(rec);
+			if(client.exists()){
+				client.call(rec);
+			}else{
+				cout << "The service for processing the reconstruction does not exist" << endl;
+			}
 			scalable_map->erase();
 			scalable_map->patches_mutex_.unlock();
+		}
+		if(!running){
+			try{
+				transformStamped =
+						tfBuffer.lookupTransform(
+								"map",
+								"head_rgbd_sensor_link",
+
+								ros::Time(0));
+				Eigen::Quaterniond  quat(
+						transformStamped.transform.rotation.x,
+						transformStamped.transform.rotation.y,
+						transformStamped.transform.rotation.z,
+						transformStamped.transform.rotation.w);
+
+				Eigen::Matrix3d m = quat.toRotationMatrix();
+				Eigen::Vector3d pos(
+						transformStamped.transform.translation.x,
+						transformStamped.transform.translation.y,
+						transformStamped.transform.translation.z);
+				scheduler->setSensorPose(m,pos);
+				firstFrameInReconstruction = false;
+				//cout << "did find transform" << endl;
+			}catch(tf2::TransformException &ex){
+				//cout << "did not find transform" << endl;
+			}
 		}
 		//generate the view matrix
 		Matrix4f proj = Camera::projection(static_cast<float>(M_PI) * 0.3f,
